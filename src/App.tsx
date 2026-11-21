@@ -51,6 +51,11 @@ import {
   type ExamResult,
 } from "./progress";
 import { formulas } from "./formulas";
+import {
+  generateFreshQuestion,
+  rememberQuestion,
+  restoreQuestionHistory,
+} from "./engine/practice";
 import { QuestionCard } from "./components/QuestionCard";
 type View =
   | "Dashboard"
@@ -110,9 +115,15 @@ export default function App() {
     [libraryFilter, setLibraryFilter] = useState("All topics"),
     [search, setSearch] = useState("");
   const started = useRef(Date.now()),
-    recent = useRef<string[]>([]),
+    recent = useRef<string[] | null>(null),
     variantCursor = useRef<Record<string, number>>({}),
     examTick = useRef(Date.now());
+  if (recent.current === null) {
+    recent.current = restoreQuestionHistory(
+      readSaved<unknown>("csc-recent-questions-v1", []),
+      progress.attempts.map((a) => a.question),
+    );
+  }
   const s = stats(progress.attempts),
     today = progress.attempts.filter(
       (a) => new Date(a.at).toDateString() === new Date().toDateString(),
@@ -191,28 +202,17 @@ export default function App() {
   ) {
     const chosen = adaptive ? adaptiveTopic(progress.attempts, seed()) : t;
     const level = adaptive ? adaptiveDifficulty(progress.attempts, chosen) : d;
-    let q: Question;
-    let tries = 0;
-    do {
-      const key = `${chosen}-${level}`;
-      const variant = subtopic
-        ? undefined
-        : (variantCursor.current[key] ?? 0) %
-          variantCounts[topics.indexOf(chosen)];
-      variantCursor.current[key] = (variantCursor.current[key] ?? 0) + 1;
-      q = generate(chosen, level, seed(), variant);
-      if (subtopic) {
-        for (let i = 0; i < variantCounts[topics.indexOf(chosen)]; i++) {
-          const candidate = generate(chosen, level, seed(), i);
-          if (candidate.subtopic === subtopic) {
-            q = candidate;
-            break;
-          }
-        }
-      }
-      tries++;
-    } while (recent.current.includes(q.text) && tries < 12);
-    recent.current = [...recent.current.slice(-29), q.text];
+    const key = `${chosen}-${level}`;
+    const variant =
+      (variantCursor.current[key] ?? 0) % variantCounts[topics.indexOf(chosen)];
+    variantCursor.current[key] = (variantCursor.current[key] ?? 0) + 1;
+    const q = generateFreshQuestion(chosen, level, seed(), {
+      variant,
+      subtopic,
+      history: recent.current ?? [],
+    });
+    recent.current = rememberQuestion(recent.current ?? [], q);
+    if (!save("csc-recent-questions-v1", recent.current)) setStorageError(true);
     setQuestion(q);
     setSelected(undefined);
     setElapsed(0);
